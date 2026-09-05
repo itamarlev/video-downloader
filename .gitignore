@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Runtime data - personal, not for version control
+logs/
+download_history.json
