@@ -114,8 +114,12 @@ def get_user_friendly_error(error_msg):
         return "Live streams cannot be downloaded while they are still live."
     elif "format" in error_lower and "not available" in error_lower:
         return "The requested quality is not available. Try selecting a different quality option."
-    elif "unable to download" in error_lower or "transport error" in error_lower:
+    elif "403" in error_lower and "forbidden" in error_lower:
+        return "YouTube rejected the request (403 Forbidden). This is usually caused by an outdated yt-dlp. Run: pip install --upgrade yt-dlp"
+    elif "transport error" in error_lower:
         return "Network error. Please check your internet connection and try again."
+    elif "unable to download" in error_lower:
+        return "Download failed while fetching video data. This can be a temporary YouTube issue, or an outdated yt-dlp. Try again, or run: pip install --upgrade yt-dlp"
     elif "geo" in error_lower or "country" in error_lower:
         return "This video is not available in your country."
     elif "sign in" in error_lower or "login" in error_lower:
