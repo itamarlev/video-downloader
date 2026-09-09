@@ -127,6 +127,7 @@ class YouTubeDownloaderApp(ctk.CTk):
             options_frame,
             values=downloader.QUALITY_OPTIONS,
             variable=self.quality_var,
+            command=self.on_quality_changed,
             width=150
         )
         self.quality_dropdown.grid(row=0, column=1, padx=(0, 20))
@@ -141,6 +142,13 @@ class YouTubeDownloaderApp(ctk.CTk):
             command=self.fetch_video_info
         )
         self.fetch_btn.grid(row=0, column=2, padx=(0, 20))
+
+        self.premiere_var = ctk.BooleanVar(value=True)
+        self.premiere_checkbox = ctk.CTkCheckBox(
+            options_frame, text="Premiere Pro compatible (H.264 + AAC)",
+            variable=self.premiere_var,
+        )
+        self.premiere_checkbox.grid(row=1, column=0, columnspan=5, sticky="w", pady=(12, 0))
 
         # Options row 2
         options_frame2 = ctk.CTkFrame(download_frame, fg_color="transparent")
@@ -181,6 +189,11 @@ class YouTubeDownloaderApp(ctk.CTk):
             command=self.start_download
         )
         self.download_btn.grid(row=3, column=0, columnspan=2, padx=15, pady=15, sticky="ew")
+
+    def on_quality_changed(self, quality):
+        self.premiere_checkbox.configure(
+            state="disabled" if quality == "Audio Only (MP3)" else "normal"
+        )
 
     def create_tabs(self):
         self.tabview = ctk.CTkTabview(self)
@@ -492,16 +505,20 @@ class YouTubeDownloaderApp(ctk.CTk):
         self.log_diag(f"Starting download: {url}")
         self.log_diag(f"Quality setting: {self.quality_var.get()}")
 
-        thread = threading.Thread(target=self.download_video, args=(url,), daemon=True)
-        thread.start()
-
-    def download_video(self, url):
         quality = self.quality_var.get()
         download_path = Path(self.location_entry.get())
-        download_path.mkdir(parents=True, exist_ok=True)
+        premiere = self.premiere_var.get() and quality != "Audio Only (MP3)"
+        self.log_diag(f"Premiere compatibility: {'on' if premiere else 'off'}")
+        thread = threading.Thread(
+            target=self.download_video, args=(url, quality, download_path, premiere), daemon=True
+        )
+        thread.start()
 
+    def download_video(self, url, quality, download_path, premiere):
         try:
-            with downloader.open_client(quality, download_path, progress_hook=self.progress_hook) as ydl:
+            download_path.mkdir(parents=True, exist_ok=True)
+            with downloader.open_client(quality, download_path, progress_hook=self.progress_hook,
+                                        premiere_compatible=premiere) as ydl:
                 self.log_diag(f"Format string: {ydl.params.get('format')}")
                 self.log_diag("Fetching video information...")
                 self.update_ui(lambda: self.progress_label.configure(text="Fetching video information..."))
@@ -546,7 +563,7 @@ class YouTubeDownloaderApp(ctk.CTk):
                 self.log_diag("Starting download...")
                 self.update_ui(lambda: self.progress_label.configure(text="Downloading..."))
 
-                ydl.download([url])
+                info = ydl.extract_info(url, download=True)
 
                 self.log_diag("Download completed!")
 
@@ -555,13 +572,15 @@ class YouTubeDownloaderApp(ctk.CTk):
                 if quality == "Audio Only (MP3)":
                     ext = "mp3"
 
+                final_path = info.get('filepath') or str(Path(ydl.prepare_filename(info)).with_suffix(f".{ext}"))
+
                 # Record in history
                 self.history.add({
                     "title": title,
                     "url": url,
-                    "quality": quality,
+                    "quality": f"{quality} | Premiere H.264" if premiere else quality,
                     "resolution": resolution,
-                    "file_path": str(download_path / f"{title}.{ext}"),
+                    "file_path": final_path,
                     "downloaded_at": datetime.now().isoformat(),
                 })
 
@@ -572,7 +591,7 @@ class YouTubeDownloaderApp(ctk.CTk):
             logger.error(f"Download error: {error_msg}", exc_info=True)
             self.log_diag(f"DOWNLOAD ERROR: {error_msg}")
 
-            user_msg = downloader.get_user_friendly_error(error_msg)
+            user_msg = downloader.get_user_friendly_error(error_msg, premiere_compatible=premiere)
             self.update_ui(lambda: self.on_download_error(user_msg))
 
         except Exception as e:

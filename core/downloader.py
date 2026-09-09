@@ -5,6 +5,7 @@ the desktop app (customtkinter) and, in the future, a web front end.
 """
 
 import logging
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -64,7 +65,17 @@ _QUALITY_FORMATS = {
 }
 
 
-def build_ydl_opts(quality, download_path, for_info_only=False, progress_hook=None):
+def premiere_format(quality):
+    """Only select YouTube H.264 video and AAC audio; never fall back to AV1."""
+    cap = f"[height<={quality[:-1]}]" if quality in QUALITY_OPTIONS[1:5] else ""
+    return (
+        f"bestvideo{cap}[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a][acodec^=mp4a]/"
+        f"best{cap}[ext=mp4][vcodec^=avc1][acodec^=mp4a]"
+    )
+
+
+def build_ydl_opts(quality, download_path, for_info_only=False, progress_hook=None,
+                   premiere_compatible=False):
     """Build yt-dlp options for the given quality setting and destination folder."""
     opts = {
         'outtmpl': str(Path(download_path) / '%(title)s.%(ext)s'),
@@ -92,16 +103,25 @@ def build_ydl_opts(quality, download_path, for_info_only=False, progress_hook=No
             'preferredcodec': 'mp3',
             'preferredquality': '320',
         }]
+    elif premiere_compatible and not for_info_only:
+        opts['format'] = premiere_format(quality)
+        # A separate name prevents yt-dlp reusing a previous AV1 download.
+        opts['outtmpl'] = str(Path(download_path) / '%(title)s - Premiere H264.%(ext)s')
     else:
         opts['format'] = _QUALITY_FORMATS.get(quality, _QUALITY_FORMATS["Best Available"])
 
     return opts
 
 
-def get_user_friendly_error(error_msg):
+def get_user_friendly_error(error_msg, premiere_compatible=False):
     """Convert a technical yt-dlp error into a user-friendly message."""
     error_lower = error_msg.lower()
 
+    if "ffmpeg" in error_lower and ("not found" in error_lower or "not installed" in error_lower):
+        return "FFmpeg is required to merge video and audio. Install FFmpeg, add it to PATH, then restart the app."
+    if premiere_compatible and "format" in error_lower and "not available" in error_lower:
+        return ("YouTube has no H.264 + AAC download at this quality or below. "
+                "Try another quality, or turn off Premiere compatibility and convert the downloaded video to H.264 before importing it.")
     if "private video" in error_lower:
         return "This video is private and cannot be downloaded."
     elif "video unavailable" in error_lower:
@@ -132,13 +152,18 @@ def is_youtube_url(url):
     return "youtube.com" in url or "youtu.be" in url
 
 
-def open_client(quality, download_path, progress_hook=None, for_info_only=False):
+def open_client(quality, download_path, progress_hook=None, for_info_only=False,
+                premiere_compatible=False):
     """Return a yt-dlp client configured for the given quality/destination.
 
     Use as a context manager: `with open_client(...) as ydl:` so callers
     (desktop UI, future web UI) never need to import yt_dlp directly.
     """
-    opts = build_ydl_opts(quality, download_path, for_info_only=for_info_only, progress_hook=progress_hook)
+    if premiere_compatible and quality != "Audio Only (MP3)" and not for_info_only:
+        if not shutil.which("ffmpeg"):
+            raise DownloadError("FFmpeg not found on PATH")
+    opts = build_ydl_opts(quality, download_path, for_info_only=for_info_only,
+                          progress_hook=progress_hook, premiere_compatible=premiere_compatible)
     return yt_dlp.YoutubeDL(opts)
 
 
@@ -168,15 +193,14 @@ def analyze_formats(info):
     }
 
 
-def download(url, quality, download_path, progress_hook=None):
+def download(url, quality, download_path, progress_hook=None, premiere_compatible=False):
     """Download a video and return its metadata info dict."""
     download_path = Path(download_path)
     download_path.mkdir(parents=True, exist_ok=True)
 
-    opts = build_ydl_opts(quality, download_path, progress_hook=progress_hook)
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        ydl.download([url])
+    with open_client(quality, download_path, progress_hook=progress_hook,
+                     premiere_compatible=premiere_compatible) as ydl:
+        info = ydl.extract_info(url, download=True)
     return info
 
 
